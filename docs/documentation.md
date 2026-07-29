@@ -15,7 +15,7 @@ Simple example:
 .. click:example::
 
     @click.command()
-    @click.argument('name')
+    @click.argument('name', help='The name to print.')
     @click.option('--count', default=1, help='number of greetings')
     def hello(name: str, count: int):
         """This script prints hello and a name one or more times."""
@@ -50,6 +50,46 @@ For subcommands, a short help snippet is generated. By default, it's the first s
     invoke(cli, args=['--help'])
 ```
 
+## Group Help Page
+
+The group help prints sub commands, options, epilog help, and arguments, and prints them together.
+
+```{eval-rst}
+.. click:example::
+
+    import click
+
+    @click.group(
+        help="Example Click app with subcommands, options, and positional arguments.",
+        epilog=("Examples:\n\n\b\n  python hello.py greet Alice --count 2\n"),
+    )
+    def cli() -> None:
+        """Run the example CLI."""
+
+    @cli.command()
+    @click.argument("name")
+    @click.option(
+        "--count",
+        default=1,
+        show_default=True,
+        type=click.IntRange(1, None),
+        help="Number of greetings to print.",
+    )
+    @click.option(
+        "--greeting",
+        default="Hello",
+        show_default=True,
+        help="Greeting prefix to use.",
+    )
+    def greet(name: str, count: int, greeting: str) -> None:
+        """Greet NAME one or more times."""
+        for _ in range(count):
+            click.echo(f"{greeting} {name}!")
+
+.. click:run::
+    invoke(cli, args=['--help'])
+```
+
 ## Command Epilog Help
 
 The help epilog is printed at the end of the help and is useful for showing example command usages or referencing additional help resources.
@@ -73,8 +113,10 @@ The help epilog is printed at the end of the help and is useful for showing exam
 
 ## Documenting Arguments
 
-{class}`click.argument` does not take a `help` parameter. This follows the Unix Command Line Tools convention of using arguments only for necessary things and documenting them in the command help text
-by name. This should then be done via the docstring.
+{class}`click.argument` accepts an optional `help` parameter that is shown in
+the `Positional arguments` section of the help page. You can still document
+arguments in the command docstring, especially when you want to describe them
+in the main help text by name.
 
 A brief example:
 
@@ -82,7 +124,7 @@ A brief example:
 .. click:example::
 
     @click.command()
-    @click.argument('filename')
+    @click.argument('filename', help='The file to print.')
     def touch(filename):
         """Print FILENAME."""
         click.echo(filename)
@@ -91,7 +133,7 @@ A brief example:
     invoke(touch, args=['--help'])
 ```
 
-Or more explicitly:
+Or more explicitly in the docstring:
 
 ```{eval-rst}
 .. click:example::
@@ -143,6 +185,22 @@ For single option boolean flags, the default remains hidden if the default value
 
 .. click:run::
    invoke(dots, args=['--help'])
+```
+
+## Showing Environment Variables
+
+To control the appearance of environment variables pass `show_envvar`.
+
+```{eval-rst}
+.. click:example::
+
+    @click.command()
+    @click.option('--username', envvar='USERNAME', show_envvar=True)
+    def greet(username):
+        click.echo(f'Hello {username}!')
+
+.. click:run::
+    invoke(greet, args=['--help'])
 ```
 
 ## Click's Wrapping Behavior
@@ -254,9 +312,17 @@ The default placeholder variable ([meta variable](https://en.wikipedia.org/wiki/
 
 ```
 
+```{admonition} Optional elements are bracketed
+:class: note
+
+   The usage line follows a consistent convention: an element is optional when it is enclosed in square brackets and required when it appears outside them. A required argument appears as `FOO` and an optional one as `[FOO]`, with a variadic argument adding a trailing `...` (so `[FOO]...`). A single pair of brackets can group several tokens, so a chained group renders an extra command and its arguments as one optional, repeatable unit: `[COMMAND2 [ARGS]...]...`. A {class}`Group` that can run without naming a subcommand (`invoke_without_command=True`) also brackets the leading command, showing `[COMMAND]` instead of `COMMAND`. The `[OPTIONS]` placeholder is always bracketed, since adding options is itself optional.
+
+   This mirrors the conventional utility-argument syntax for optional arguments and operands ([POSIX §12.1](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html), [`man-pages(7)`](https://man7.org/linux/man-pages/man7/man-pages.7.html)), where a bracketed expression followed by `...` denotes zero or more occurrences. A subcommand name is a positional operand, so Click brackets it under the same rule.
+```
+
 ## Help Parameter Customization
 
-Help parameters are automatically added by Click for any command. The default is `--help` but can be overridden by the context setting {attr}`~Context.help_option_names`. Click also performs automatic conflict resolution on the default help parameter, so if a command itself implements a parameter named `help` then the default help will not be run.
+Help parameters are automatically added by Click for any command. The default is `--help` but can be overridden by the context setting {attr}`~Context.help_option_names`. Click resolves conflicts automatically: an option reusing one of the help option names takes it over, and the default help parameter is dropped once all its names are taken. A parameter merely named `help`, like `click.argument("help")`, does not disable it: both keep working independently.
 
 This example changes the default parameters to `-h` and `--help`
 instead of just `--help`:

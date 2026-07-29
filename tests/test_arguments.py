@@ -102,7 +102,7 @@ def test_bytes_args(runner, monkeypatch):
     )
 
 
-def test_file_args(runner):
+def test_file_args(runner, tmp_path):
     @click.command()
     @click.argument("input", type=click.File("rb"))
     @click.argument("output", type=click.File("wb"))
@@ -113,16 +113,15 @@ def test_file_args(runner):
                 break
             output.write(chunk)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(inout, ["-", "hello.txt"], input="Hey!")
-        assert result.output == ""
-        assert result.exit_code == 0
-        with open("hello.txt", "rb") as f:
-            assert f.read() == b"Hey!"
+    hello = tmp_path / "hello.txt"
+    result = runner.invoke(inout, ["-", str(hello)], input="Hey!")
+    assert result.output == ""
+    assert result.exit_code == 0
+    assert hello.read_bytes() == b"Hey!"
 
-        result = runner.invoke(inout, ["hello.txt", "-"])
-        assert result.output == "Hey!"
-        assert result.exit_code == 0
+    result = runner.invoke(inout, [str(hello), "-"])
+    assert result.output == "Hey!"
+    assert result.exit_code == 0
 
 
 def test_path_allow_dash(runner):
@@ -136,7 +135,7 @@ def test_path_allow_dash(runner):
     assert result.exit_code == 0
 
 
-def test_file_atomics(runner):
+def test_file_atomics(runner, tmp_path):
     @click.command()
     @click.argument("output", type=click.File("wb", atomic=True))
     def inout(output):
@@ -146,14 +145,12 @@ def test_file_atomics(runner):
             old_content = f.read()
             assert old_content == b"OLD\n"
 
-    with runner.isolated_filesystem():
-        with open("foo.txt", "wb") as f:
-            f.write(b"OLD\n")
-        result = runner.invoke(inout, ["foo.txt"], input="Hey!", catch_exceptions=False)
-        assert result.output == ""
-        assert result.exit_code == 0
-        with open("foo.txt", "rb") as f:
-            assert f.read() == b"Foo bar baz\n"
+    foo = tmp_path / "foo.txt"
+    foo.write_bytes(b"OLD\n")
+    result = runner.invoke(inout, [str(foo)], input="Hey!", catch_exceptions=False)
+    assert result.output == ""
+    assert result.exit_code == 0
+    assert foo.read_bytes() == b"Foo bar baz\n"
 
 
 def test_stdout_default(runner):
@@ -295,6 +292,50 @@ def test_implicit_non_required(runner):
     assert result.output == "test\n"
 
 
+def test_argument_help(runner):
+    @click.command()
+    @click.argument("name", help="The name to print")
+    @click.option("--count", default=1, help="number of greetings")
+    def cli(name, count):
+        pass
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "Positional arguments:" in result.output
+    assert "NAME" in result.output
+    assert "The name to print" in result.output
+    assert "Options:" in result.output
+    assert "number of greetings" in result.output
+    assert result.output.index("Positional arguments:") < result.output.index(
+        "Options:"
+    )
+
+
+def test_argument_help_options_only_no_arguments_section(runner):
+    @click.command()
+    @click.option("--count", default=1, help="number of greetings")
+    def cli(count):
+        pass
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "Positional arguments:" not in result.output
+    assert "Options:" in result.output
+    assert "number of greetings" in result.output
+
+
+def test_argument_help_optional_metavar(runner):
+    @click.command()
+    @click.argument("name", required=False, default="", help="The name to print")
+    def cli(name):
+        pass
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "[NAME]" in result.output
+    assert "The name to print" in result.output
+
+
 def test_deprecated_usage(runner):
     @click.command()
     @click.argument("f", required=False, deprecated=True)
@@ -304,6 +345,76 @@ def test_deprecated_usage(runner):
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0, result.output
     assert "[F!]" in result.output
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, "FOO"),
+        ({"required": True}, "FOO"),
+        ({"required": False}, "[FOO]"),
+        ({"default": "x"}, "[FOO]"),
+        ({"nargs": -1}, "[FOO]..."),
+        ({"nargs": -1, "required": True}, "FOO..."),
+        ({"nargs": 2}, "FOO..."),
+        ({"nargs": 2, "required": False}, "[FOO]..."),
+    ],
+)
+def test_argument_metavar_marks_optional(runner, kwargs, expected):
+    """An argument is bracketed in the usage line only when it is optional."""
+
+    @click.command()
+    @click.argument("foo", **kwargs)
+    def cli(foo):
+        pass
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert result.output.splitlines()[0] == f"Usage: cli [OPTIONS] {expected}"
+
+
+@pytest.mark.parametrize(
+    ("deprecated", "expected_label"),
+    [(True, "(DEPRECATED)"), ("use g instead", "(DEPRECATED: use g instead)")],
+)
+def test_deprecated_usage_help_record(runner, deprecated, expected_label):
+    @click.command()
+    @click.argument("f", required=False, deprecated=deprecated, help="path to the file")
+    def cli(f):
+        click.echo(f)
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "Positional arguments:" in result.output
+    assert "[F!]" in result.output
+    assert f"path to the file {expected_label}" in result.output
+
+
+def test_deprecated_usage_help_record_without_help(runner):
+    @click.command()
+    @click.argument("f", required=False, deprecated=True)
+    def cli(f):
+        click.echo(f)
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    # Deprecation alone produces a help row with just the deprecation label.
+    assert "Positional arguments:" in result.output
+    assert "(DEPRECATED)" in result.output
+
+
+@pytest.mark.parametrize(
+    ("deprecated", "expected"),
+    [(True, "(DEPRECATED)"), ("USE B INSTEAD", "(DEPRECATED: USE B INSTEAD)")],
+)
+@pytest.mark.parametrize("help_text", ["", None])
+def test_deprecated_empty_help_no_leading_space(help_text, deprecated, expected):
+    """An argument with empty or missing help text must not gain a stray leading
+    space before the deprecation label.
+    """
+    arg = click.Argument(["foo"], required=False, help=help_text, deprecated=deprecated)
+    ctx = click.Context(click.Command("cli"))
+    assert arg.get_help_record(ctx)[1] == expected
 
 
 @pytest.mark.parametrize("deprecated", [True, "USE B INSTEAD"])
@@ -399,6 +510,17 @@ def test_nargs_specified_plus_star_ordering(runner):
     ],
 )
 def test_good_defaults_for_nargs(runner, argument_params, args, expected):
+    """Comprehensive check of default-value processing for arguments with
+    ``nargs``.
+
+    .. hint::
+        An option-specific equivalent is available in
+        ``test_options.py::test_good_defaults_for_multiple``.
+
+        A smoke test covering a single basic case is in
+        ``test_defaults.py::test_nargs_plus_multiple``.
+    """
+
     @click.command()
     @click.argument("a", type=int, **argument_params)
     def cmd(a):
@@ -579,3 +701,40 @@ def test_duplicate_names_warning(runner, args_one, args_two):
 
     with pytest.warns(UserWarning):
         runner.invoke(cli, [])
+
+
+@pytest.mark.parametrize(
+    ("argument_kwargs", "pass_argv"),
+    (
+        # there is a large potential parameter space to explore here
+        # this is just a very small sample of it
+        ({}, ["myvalue"]),
+        ({"nargs": -1}, []),
+        ({"nargs": -1}, ["myvalue"]),
+        ({"default": None}, ["myvalue"]),
+        ({"required": False}, []),
+        ({"required": False}, ["myvalue"]),
+    ),
+)
+def test_argument_custom_class_can_override_type_cast_value_and_never_sees_unset(
+    runner, argument_kwargs, pass_argv
+):
+    """
+    Test that overriding type_cast_value is supported
+
+    In particular, the argument is never passed an UNSET sentinel value.
+    """
+
+    class CustomArgument(click.Argument):
+        def type_cast_value(self, ctx, value):
+            assert value is not UNSET
+            return value
+
+    @click.command()
+    @click.argument("myarg", **argument_kwargs, cls=CustomArgument)
+    def cmd(myarg):
+        click.echo("ok")
+
+    result = runner.invoke(cmd, pass_argv)
+    assert not result.exception
+    assert result.exit_code == 0

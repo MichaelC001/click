@@ -52,16 +52,18 @@ click.echo('Hello World!', err=True)
 ```{versionadded} 2.0
 ```
 
-The {func}`echo` function supports ANSI colors and styles. On Windows this uses [colorama](https://pypi.org/project/colorama/).
+The {func}`echo` function supports ANSI colors and styles. It will
+automatically strip ANSI color codes if the stream is not connected to a
+terminal.
 
-Primarily this means that:
+```{admonition} Older Windows Support
+:class: note
 
-- Click's {func}`echo` function will automatically strip ANSI color codes if the stream is not connected to a terminal.
-- the {func}`echo` function will transparently connect to the terminal on Windows and translate ANSI codes to terminal
-  API calls. This means that colors will work on Windows the same way they do on other operating systems.
-
-On Windows, Click uses colorama without calling `colorama.init()`. You can still call that in your code, but it's not
-required for Click.
+Recent versions of Windows 11 support ANSI styling by default, in both
+Windows Terminal and cmd.exe. If you need to support color output on older
+versions of Windows, install
+[colorama](https://pypi.org/project/colorama/) and call `colorama.init()`.
+```
 
 For styling a string, the {func}`style` function can be used:
 
@@ -108,6 +110,28 @@ you can pass a generator (or generator function) instead of a string:
     @click.command()
     def less():
         click.echo_via_pager(_generate_output())
+```
+
+For more complex programs, which can't easily use a simple generator, you
+can get access to a writable file-like object for the pager, and write to
+that instead:
+
+```{eval-rst}
+.. click:example::
+    @click.command()
+    def less():
+        with click.get_pager_file() as pager:
+            for idx in range(50000):
+                print(idx, file=pager)
+```
+
+```{admonition} Why print() instead of echo()?
+:class: hint
+
+The pager object deals with ANSI color and style codes itself: they are kept or
+stripped depending on what the pager supports, exactly as {func}`echo` would do.
+Any code that writes to a file, including plain {func}`print`, can therefore be
+used with it.
 ```
 
 ## Screen Clearing
@@ -238,33 +262,6 @@ Example:
 click.echo(f"Path: {click.format_filename(b'foo.txt')}")
 ```
 
-## Standard Streams
-
-For command line utilities, it's very important to get access to input and output streams reliably. Python generally
-provides access to these streams through `sys.stdout` and friends, but unfortunately, there are API differences between
-2.x and 3.x, especially with regards to how these streams respond to Unicode and binary data.
-
-Because of this, click provides the {func}`get_binary_stream` and {func}`get_text_stream` functions, which produce
-consistent results with different Python versions and for a wide variety of terminal configurations.
-
-The end result is that these functions will always return a functional stream object (except in very odd cases; see
-{doc}`/unicode-support`).
-
-Example:
-
-```python
-import click
-
-stdin_text = click.get_text_stream('stdin')
-stdout_binary = click.get_binary_stream('stdout')
-```
-
-```{versionadded} 6.0
-```
-
-Click now emulates output streams on Windows to support unicode to the Windows console through separate APIs. For more
-information see {doc}`wincmd`.
-
 ## Intelligent File Opening
 
 ```{versionadded} 3.0
@@ -365,7 +362,7 @@ import time
 
 with click.progressbar([1, 2, 3]) as bar:
     for x in bar:
-        print(f"sleep({x})...")
+        click.echo(f"sleep({x})...")
         time.sleep(x)
 ```
 

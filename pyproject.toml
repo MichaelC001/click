@@ -1,6 +1,6 @@
 [project]
 name = "click"
-version = "8.3.dev"
+version = "8.5.0.dev"
 description = "Composable command line interface toolkit"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -14,9 +14,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 requires-python = ">=3.10"
-dependencies = [
-    "colorama; platform_system == 'Windows'",
-]
 
 [project.urls]
 Donate = "https://palletsprojects.com/donate"
@@ -51,6 +48,11 @@ pre-commit = [
 tests = [
     "pytest",
 ]
+tests-random = [
+    "pytest",
+    "pytest-randomly",
+    "pytest-xdist",
+]
 typing = [
     "mypy",
     "pyright",
@@ -68,7 +70,7 @@ name = "click"
 include = [
     "docs/",
     "tests/",
-    "CHANGES.rst",
+    "CHANGES.md",
     "uv.lock"
 ]
 exclude = [
@@ -83,6 +85,10 @@ testpaths = ["tests"]
 filterwarnings = [
     "error",
 ]
+markers = [
+    "stress: high-iteration stress tests for race conditions (deselect with '-m \"not stress\"')",
+]
+addopts = "-m 'not stress'"
 
 [tool.coverage.run]
 branch = true
@@ -105,12 +111,6 @@ show_error_codes = true
 pretty = true
 strict = true
 
-[[tool.mypy.overrides]]
-module = [
-    "colorama.*",
-]
-ignore_missing_imports = true
-
 [tool.pyright]
 pythonVersion = "3.10"
 include = ["src", "tests/typing"]
@@ -131,10 +131,12 @@ select = [
     "I",  # isort
     "UP",  # pyupgrade
     "W",  # pycodestyle warning
+    "ICN", #flake8-import-conventions (ICN)
 ]
-ignore = [
-    "UP038",  # keep isinstance tuple
-]
+
+[tool.ruff.lint.flake8-import-conventions.aliases]
+# Declare the default aliases.
+typing = "t"
 
 [tool.ruff.lint.isort]
 force-single-line = true
@@ -142,8 +144,10 @@ order-by-type = false
 
 [tool.tox]
 env_list = [
-    "py3.13", "py3.12", "py3.11", "py3.10",
+    "py3.14", "py3.13", "py3.12", "py3.11", "py3.10",
+    "py3.14t",
     "pypy3.11",
+    "stress-py3.14", "stress-py3.14t",
     "style",
     "typing",
     "docs",
@@ -162,6 +166,24 @@ commands = [[
     {replace = "posargs", default = [], extend = true},
 ]]
 
+[tool.tox.env.random]
+description = "randomized parallel tests to detect test pollution and race conditions"
+dependency_groups = ["tests-random"]
+commands = [[
+    "pytest", "-v", "--tb=short", "--numprocesses=auto",
+    "--basetemp={env_tmp_dir}",
+    {replace = "posargs", default = [], extend = true},
+]]
+
+[tool.tox.env.stress]
+description = "high-iteration stress tests for race conditions"
+commands = [[
+    "pytest", "-v", "--tb=short", "-x", "-m", "stress",
+    "--basetemp={env_tmp_dir}",
+    "--override-ini=addopts=",
+    {replace = "posargs", default = [], extend = true},
+]]
+
 [tool.tox.env.style]
 description = "run all pre-commit hooks on all files"
 dependency_groups = ["pre-commit"]
@@ -173,6 +195,7 @@ description = "run static type checkers"
 dependency_groups = ["typing"]
 commands = [
     ["mypy"],
+    ["pyright", "--ignoreexternal", "--verifytypes", "click"],
 ]
 
 [tool.tox.env.docs]
