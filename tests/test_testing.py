@@ -89,6 +89,50 @@ def test_echo_stdin_prompts():
     assert result.output == "Foo: one\nBar: two\nfoo=one, bar=two\n"
 
 
+@pytest.mark.parametrize(
+    ("data", "echo", "read"),
+    [
+        pytest.param("bar\n\x04", "bar\n^D\n", b"bar\n", id="eot-ends-input"),
+        pytest.param("bar\n\x1a", "bar\n^Z\n", b"bar\n", id="sub-ends-input"),
+        pytest.param("\x04", "^D\n", b"", id="eot-alone"),
+        pytest.param("bar\x04baz\n", "bar^D\nbaz\n", b"barbaz\n", id="eot-mid-chunk"),
+        pytest.param("bar\n", "bar\n", b"bar\n", id="no-control-byte"),
+    ],
+)
+def test_echo_stdin_control_bytes(data, echo, read):
+    """A control byte of `<stdin>` is echoed to `<stdout>` in caret notation and
+    removed from the command.
+    """
+
+    @click.command()
+    def test():
+        click.echo(repr(_get_binary_stream("stdin").read()))
+
+    result = CliRunner(echo_stdin=True).invoke(test, input=data)
+    assert not result.exception
+    assert result.output == f"{echo}{read!r}\n"
+
+
+@pytest.mark.parametrize(
+    "read_lines",
+    [
+        pytest.param(lambda: list(sys.stdin), id="text"),
+        pytest.param(lambda: list(_get_binary_stream("stdin")), id="binary"),
+        pytest.param(lambda: _get_binary_stream("stdin").readlines(), id="readlines"),
+    ],
+)
+def test_echo_stdin_control_byte_is_not_a_line(read_lines):
+    """A control byte that ends `<stdin>` is not handed over as a last line."""
+
+    @click.command()
+    def test():
+        click.echo(len(read_lines()))
+
+    result = CliRunner(echo_stdin=True).invoke(test, input="bar\nbaz\n\x04")
+    assert not result.exception
+    assert result.output == "bar\nbaz\n^D\n2\n"
+
+
 def test_runner_with_stream():
     @click.command()
     def test():
@@ -269,7 +313,6 @@ def test_with_echo_via_pager():
 
 
 def test_exit_code_and_output_from_sys_exit():
-    # See issue #362
     @click.command()
     def cli_string():
         click.echo("hello world")
@@ -429,6 +472,92 @@ def test_command_standalone_mode_returns_value():
     assert result.exit_code == 0
 
 
+@pytest.mark.parametrize(
+    ("runner_color", "context_settings", "context_color", "styled"),
+    [
+        # Without a ``color`` setting, the context has no color of its own, and
+        # the ``color`` of the runner decides.
+        (False, None, None, False),
+        (True, None, None, True),
+        (False, {}, None, False),
+        (True, {}, None, True),
+        (False, {"color": None}, None, False),
+        (True, {"color": None}, None, True),
+        # A ``color`` setting reaches the context, where it overrides the
+        # ``color`` of the runner.
+        (False, {"color": True}, True, True),
+        (True, {"color": True}, True, True),
+        (False, {"color": False}, False, False),
+        (True, {"color": False}, False, False),
+    ],
+)
+def test_context_settings_color(runner_color, context_settings, context_color, styled):
+    """``color`` names a parameter of ``invoke()`` and a context setting.
+    ``context_settings`` carries the second one, which ``extra`` cannot.
+    """
+
+    @click.command()
+    @click.pass_context
+    def cli(ctx):
+        click.secho("hello world", fg="blue")
+        return ctx.color
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        color=runner_color,
+        context_settings=context_settings,
+        standalone_mode=False,
+    )
+    assert not result.exception
+    assert result.return_value is context_color
+    expected = click.style("hello world", fg="blue") if styled else "hello world"
+    assert result.output == f"{expected}\n"
+
+
+@pytest.mark.parametrize("terminal_width", [100, None])
+def test_context_settings_override_command(terminal_width):
+    """Settings given to ``invoke()`` take precedence over the ones the command
+    declares, for that invocation only.
+    """
+
+    @click.command(context_settings={"terminal_width": 60, "max_content_width": 70})
+    @click.pass_context
+    def cli(ctx):
+        return ctx.terminal_width, ctx.max_content_width
+
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli, context_settings={"terminal_width": terminal_width}, standalone_mode=False
+    )
+    assert result.return_value == (terminal_width, 70)
+
+    result = runner.invoke(cli, standalone_mode=False)
+    assert result.return_value == (60, 70)
+    assert cli.context_settings == {"terminal_width": 60, "max_content_width": 70}
+
+
+def test_context_settings_duplicates_extra():
+    """A setting given in both ``extra`` and ``context_settings`` fails like a
+    keyword argument given twice.
+    """
+
+    @click.command()
+    def cli():
+        pass
+
+    runner = CliRunner()
+
+    with pytest.raises(TypeError, match="multiple values for keyword argument 'obj'"):
+        runner.invoke(
+            cli,
+            obj="extra",
+            context_settings={"obj": "settings"},
+            catch_exceptions=False,
+        )
+
+
 def test_file_stdin_attrs(runner):
     @click.command()
     @click.argument("f", type=click.File())
@@ -481,9 +610,9 @@ def test_tempdir_replacement_pattern(runner, tmp_path):
 def test_tempdir_isolation_is_thread_safe():
     """The recommended replacement is thread-safe, unlike ``isolated_filesystem()``.
 
-    Each thread owns a ``tempfile.TemporaryDirectory`` and works through
-    absolute paths, so there is no ``os.chdir`` and no process-global CWD race
-    (the reason ``isolated_filesystem()`` is not thread-safe, issue #3501).
+    Each thread owns a ``tempfile.TemporaryDirectory`` and works through absolute paths,
+    so there is no ``os.chdir`` and no process-global CWD race (the reason
+    ``isolated_filesystem()`` is not thread-safe).
 
     ``invoke()`` is deliberately not called concurrently here: it redirects the
     process-global standard streams, so parallel invocations in one process
@@ -652,7 +781,7 @@ def test_capture_fd_os_write():
 
 @needs_fd_capture
 def test_capture_fd_stale_reference():
-    """capture='fd' captures writes from stale stdout references (issue #2874).
+    """capture='fd' captures writes from stale stdout references.
 
     Simulates ``from sys import stdout`` at import time, which grabs
     the real stdout connected to fd 1.  The stale object's underlying
@@ -678,8 +807,8 @@ def test_capture_fd_stale_reference():
 
 @needs_fd_capture
 def test_capture_fd_logging_handler(tmp_path):
-    """capture='fd' captures logging output from a handler holding a stale
-    stderr reference (issue #2827).
+    """capture='fd' captures logging output from a handler holding a stale stderr
+    reference.
 
     stdlib logging.StreamHandler grabs sys.stderr at configuration time.
     Under normal CliRunner (sys-level capture), the handler still writes
@@ -724,7 +853,7 @@ def test_capture_fd_logging_handler(tmp_path):
 
 @needs_fd_capture
 def test_capture_fd_faulthandler():
-    """faulthandler.enable() works with capture='fd' (issue #2865)."""
+    """faulthandler.enable() works with capture='fd'."""
 
     @click.command()
     def cli():
@@ -738,9 +867,8 @@ def test_capture_fd_faulthandler():
 
 
 def test_capture_sys_fileno_raises():
-    """capture='sys' leaves fileno() raising UnsupportedOperation, so user
-    code that does ``os.dup2(w, sys.stdout.fileno())`` cannot mutate the host
-    runner's stdout (issue #3384).
+    """capture='sys' leaves fileno() raising UnsupportedOperation, so user code that
+    does ``os.dup2(w, sys.stdout.fileno())`` cannot mutate the host runner's stdout.
     """
 
     @click.command()

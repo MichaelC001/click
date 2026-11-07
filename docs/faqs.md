@@ -7,6 +7,20 @@
 
 ## General
 
+(not-a-ui-library)=
+### Colors, themes and other terminal UI features
+
+Why are feature requests such as colors, themes, and UI customization consistently
+declined?
+
+#### Answer
+
+Click tries to be a very simple yet powerful package for creating command line
+utilities. To stay simple, it just contains the basics with a few utilities that are
+retained for historical and compatibility reasons. Those simple utilities have been
+superseded by more specialized packages that you can find in our list of
+[third-party projects](contrib.md#third-party-projects).
+
 ### Calling a command as a regular function
 
 I decorated a function with `@click.command()` to make it a CLI. When I import that name and call it from Python, it does not run my function. It parses arguments, prints a usage error and exits the process:
@@ -147,6 +161,15 @@ You can set the `EDITOR` in your environment with its appropriate flags:
 | Sublime Text | `EDITOR="subl -w"` |
 
 For an editor with no such flag, a workaround is to point `EDITOR` at a small wrapper script that opens the editor and blocks until it exits.
+
+(pager-ctrl-c)=
+### {kbd}`Ctrl+C` in the pager stops the program
+
+`less` follows a stream with {kbd}`F`, and {kbd}`Ctrl+C` leaves follow mode. It also sends `SIGINT` to the command, which stops it.
+
+#### Answer
+
+To quit `less` in follow mode, press {kbd}`Ctrl+X` then {kbd}`q`, which leaves follow mode and closes the pager. Pressing {kbd}`Ctrl+C` instead propagates to Click and quits the command as well.
 
 ### Tab completion during interactive prompts
 

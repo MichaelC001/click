@@ -117,9 +117,40 @@ def test_sync():
   runner = CliRunner()
   result = runner.invoke(cli, ['sync'], terminal_width=60)
   assert result.exit_code == 0
-  assert 'Debug mode is on' in result.output
   assert 'Syncing' in result.output
 ```
+
+A setting that shares its name with a parameter of {meth}`CliRunner.invoke` cannot be
+passed this way. This is the case of `color`: `invoke(color=True)` tells that the
+terminal supports colors, and leaves the `color` of the context unset. Pass such a
+setting in `context_settings` instead:
+
+```{code-block} python
+:caption: greet.py
+
+import click
+
+@click.command()
+def greet():
+   click.secho('Hello World!', fg='green')
+```
+
+```{code-block} python
+:caption: test_greet.py
+
+import click
+from click.testing import CliRunner
+from greet import greet
+
+def test_greet_color():
+  runner = CliRunner()
+  result = runner.invoke(greet, context_settings={'color': True})
+  assert result.exit_code == 0
+  assert result.output == click.style('Hello World!', fg='green') + '\n'
+```
+
+The settings in `context_settings` take precedence over the ones the command declares,
+for that invocation only.
 
 ## File System Isolation
 
@@ -221,6 +252,39 @@ def test_prompts():
 Prompts will be emulated so they write the input data to
 the output stream as well. If hidden input is expected then this
 does not happen.
+
+Set `echo_stdin=True` on the runner to echo every read from `<stdin>` to
+`<stdout>`. The echo translate the bytes that end `<stdin>` and print them
+in the terminal as their key, and does not pass them to the command.
+
+| `<stdin>` byte | Echoed to `<stdout>` as | Pressed keys             |
+|----------------|-------------------------|--------------------------|
+| `\x04`         | `^D\n`                  | {kbd}`Ctrl+D` on Unix    |
+| `\x1a`         | `^Z\n`                  | {kbd}`Ctrl+Z` on Windows |
+
+```{code-block} python
+:caption: shout.py
+
+import sys
+import click
+
+@click.command()
+def shout():
+   click.echo(sys.stdin.read().upper(), nl=False)
+```
+
+```{code-block} python
+:caption: test_shout.py
+
+from click.testing import CliRunner
+from shout import shout
+
+def test_shout():
+   runner = CliRunner(echo_stdin=True)
+   result = runner.invoke(shout, input='hello\n\x04')
+   assert not result.exception
+   assert result.output == 'hello\n^D\nHELLO\n'
+```
 
 ## Capture modes
 
